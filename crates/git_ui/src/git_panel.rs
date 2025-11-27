@@ -701,17 +701,40 @@ impl GitPanel {
         cx.notify();
     }
 
-    fn select_first(&mut self, _: &SelectFirst, _window: &mut Window, cx: &mut Context<Self>) {
+    fn show_diff_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        maybe!({
+            let entry = self.entries.get(self.selected_entry?)?.status_entry()?;
+            let workspace = self.workspace.upgrade()?;
+
+            if let Some(project_diff) = workspace.read(cx).item_of_type::<ProjectDiff>(cx) {
+                project_diff.update(cx, |project_diff, cx| {
+                    project_diff.move_to_entry(entry.clone(), window, cx);
+                });
+            } else {
+                self.workspace
+                    .update(cx, |workspace, cx| {
+                        ProjectDiff::deploy_at(workspace, Some(entry.clone()), window, cx);
+                    })
+                    .ok();
+            }
+            self.focus_handle.focus(window);
+
+            Some(())
+        });
+    }
+
+    fn select_first(&mut self, _: &SelectFirst, window: &mut Window, cx: &mut Context<Self>) {
         if !self.entries.is_empty() {
             self.selected_entry = Some(1);
             self.scroll_to_selected_entry(cx);
+            self.show_diff_preview(window, cx);
         }
     }
 
     fn select_previous(
         &mut self,
         _: &SelectPrevious,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let item_count = self.entries.len();
@@ -738,12 +761,13 @@ impl GitPanel {
             }
 
             self.scroll_to_selected_entry(cx);
+            self.show_diff_preview(window, cx);
         }
 
         cx.notify();
     }
 
-    fn select_next(&mut self, _: &SelectNext, _window: &mut Window, cx: &mut Context<Self>) {
+    fn select_next(&mut self, _: &SelectNext, window: &mut Window, cx: &mut Context<Self>) {
         let item_count = self.entries.len();
         if item_count == 0 {
             return;
@@ -765,15 +789,17 @@ impl GitPanel {
             }
 
             self.scroll_to_selected_entry(cx);
+            self.show_diff_preview(window, cx);
         }
 
         cx.notify();
     }
 
-    fn select_last(&mut self, _: &SelectLast, _window: &mut Window, cx: &mut Context<Self>) {
+    fn select_last(&mut self, _: &SelectLast, window: &mut Window, cx: &mut Context<Self>) {
         if self.entries.last().is_some() {
             self.selected_entry = Some(self.entries.len() - 1);
             self.scroll_to_selected_entry(cx);
+            self.show_diff_preview(window, cx);
         }
     }
 
@@ -816,27 +842,20 @@ impl GitPanel {
         maybe!({
             let entry = self.entries.get(self.selected_entry?)?.status_entry()?;
             let workspace = self.workspace.upgrade()?;
-            let git_repo = self.active_repository.as_ref()?;
 
-            if let Some(project_diff) = workspace.read(cx).active_item_as::<ProjectDiff>(cx)
-                && let Some(project_path) = project_diff.read(cx).active_path(cx)
-                && Some(&entry.repo_path)
-                    == git_repo
-                        .read(cx)
-                        .project_path_to_repo_path(&project_path, cx)
-                        .as_ref()
-            {
+            if let Some(project_diff) = workspace.read(cx).item_of_type::<ProjectDiff>(cx) {
+                project_diff.update(cx, |project_diff, cx| {
+                    project_diff.move_to_entry(entry.clone(), window, cx);
+                });
                 project_diff.focus_handle(cx).focus(window);
                 project_diff.update(cx, |project_diff, cx| project_diff.autoscroll(cx));
-                return None;
-            };
-
-            self.workspace
-                .update(cx, |workspace, cx| {
-                    ProjectDiff::deploy_at(workspace, Some(entry.clone()), window, cx);
-                })
-                .ok();
-            self.focus_handle.focus(window);
+            } else {
+                self.workspace
+                    .update(cx, |workspace, cx| {
+                        ProjectDiff::deploy_at(workspace, Some(entry.clone()), window, cx);
+                    })
+                    .ok();
+            }
 
             Some(())
         });
