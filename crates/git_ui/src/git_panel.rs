@@ -5889,6 +5889,123 @@ mod tests {
         });
     }
 
+    #[gpui::test]
+    async fn test_keyboard_navigation_shows_diff_preview(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree(
+            path!("/project"),
+            json!({
+                ".git": {},
+                "file_a": "content a\n",
+                "file_b": "content b\n",
+                "file_c": "content c\n",
+            }),
+        )
+        .await;
+
+        fs.set_head_and_index_for_repo(
+            path!("/project/.git").as_ref(),
+            &[
+                ("file_a", "old content a\n".into()),
+                ("file_b", "old content b\n".into()),
+                ("file_c", "old content c\n".into()),
+            ],
+        );
+
+        let project = Project::test(fs.clone(), [Path::new(path!("/project"))], cx).await;
+        let workspace =
+            cx.add_window(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        let cx = &mut VisualTestContext::from_window(*workspace, cx);
+        let panel = workspace.update(cx, GitPanel::new).unwrap();
+
+        // Enable sort_by_path to have a predictable order without headers
+        cx.update(|_window, cx| {
+            SettingsStore::update_global(cx, |store, cx| {
+                store.update_user_settings(cx, |settings| {
+                    settings.git_panel.get_or_insert_default().sort_by_path = Some(true);
+                })
+            });
+        });
+
+        let handle = cx.update_window_entity(&panel, |panel, _, _| {
+            std::mem::replace(&mut panel.update_visible_entries_task, Task::ready(()))
+        });
+        cx.executor().advance_clock(2 * UPDATE_DEBOUNCE);
+        handle.await;
+
+        // Select first entry to start keyboard navigation
+        // Note: select_first uses index 1 assuming there's a header at index 0
+        // With sort_by_path enabled, there are no headers, so index 1 is actually file_b
+        panel.update_in(cx, |panel, window, cx| {
+            panel.select_first(&SelectFirst, window, cx);
+        });
+        cx.run_until_parked();
+
+        // After select_first, the diff should be opened showing file_b (index 1)
+        let _ = workspace.update(cx, |workspace, _window, cx| {
+            let active_path = workspace
+                .item_of_type::<ProjectDiff>(cx)
+                .expect("ProjectDiff should exist after select_first")
+                .read(cx)
+                .active_path(cx)
+                .expect("active_path should exist");
+            assert_eq!(active_path.path, rel_path("file_b").into_arc());
+        });
+
+        // Navigate to next entry with keyboard
+        panel.update_in(cx, |panel, window, cx| {
+            panel.select_next(&SelectNext, window, cx);
+        });
+        cx.run_until_parked();
+
+        // After select_next, the diff should show file_c
+        let _ = workspace.update(cx, |workspace, _window, cx| {
+            let active_path = workspace
+                .item_of_type::<ProjectDiff>(cx)
+                .expect("ProjectDiff should exist after select_next")
+                .read(cx)
+                .active_path(cx)
+                .expect("active_path should exist");
+            assert_eq!(active_path.path, rel_path("file_c").into_arc());
+        });
+
+        // Navigate back with select_previous
+        panel.update_in(cx, |panel, window, cx| {
+            panel.select_previous(&SelectPrevious, window, cx);
+        });
+        cx.run_until_parked();
+
+        // After select_previous, the diff should show file_b
+        let _ = workspace.update(cx, |workspace, _window, cx| {
+            let active_path = workspace
+                .item_of_type::<ProjectDiff>(cx)
+                .expect("ProjectDiff should exist after select_previous")
+                .read(cx)
+                .active_path(cx)
+                .expect("active_path should exist");
+            assert_eq!(active_path.path, rel_path("file_b").into_arc());
+        });
+
+        // Navigate back again with select_previous
+        panel.update_in(cx, |panel, window, cx| {
+            panel.select_previous(&SelectPrevious, window, cx);
+        });
+        cx.run_until_parked();
+
+        // After another select_previous, the diff should show file_a
+        let _ = workspace.update(cx, |workspace, _window, cx| {
+            let active_path = workspace
+                .item_of_type::<ProjectDiff>(cx)
+                .expect("ProjectDiff should exist after second select_previous")
+                .read(cx)
+                .active_path(cx)
+                .expect("active_path should exist");
+            assert_eq!(active_path.path, rel_path("file_a").into_arc());
+        });
+    }
+
     fn assert_entry_paths(entries: &[GitListEntry], expected_paths: &[Option<&str>]) {
         assert_eq!(entries.len(), expected_paths.len());
         for (entry, expected_path) in entries.iter().zip(expected_paths) {
